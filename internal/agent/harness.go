@@ -39,6 +39,12 @@ func (h *Harness) RegisterTool(t Tool) {
 	h.tools[t.Name()] = t
 }
 
+func (h *Harness) RegisterFunc(name, description string, fn func() string) {
+	h.RegisterTool(Func(name, description, func(struct{}) (string, error) {
+		return fn(), nil
+	}))
+}
+
 func (h *Harness) Run(task string) (string, error) {
 	h.messages = append(h.messages, UserMessage(task))
 
