@@ -35,6 +35,11 @@ func (h *Harness) WithAPIKey(key string) *Harness {
 	return h
 }
 
+func (h *Harness) WithSystemPrompt(prompt string) *Harness {
+	h.messages = append([]Message{SystemMessage(prompt)}, h.messages...)
+	return h
+}
+
 func (h *Harness) RegisterTool(t Tool) {
 	h.tools[t.Name()] = t
 }
@@ -64,7 +69,10 @@ func (h *Harness) Run(task string) (string, error) {
 		}
 
 		for _, call := range response.ToolCalls {
-			result := h.executeTool(call)
+			result, err := h.executeTool(call)
+			if err != nil {
+				return "", err
+			}
 			h.messages = append(h.messages, ToolResultMessage(call.ID, result))
 		}
 	}
@@ -72,15 +80,15 @@ func (h *Harness) Run(task string) (string, error) {
 	return "", fmt.Errorf("exceeded max steps (%d)", h.maxSteps)
 }
 
-func (h *Harness) executeTool(call ToolCall) string {
+func (h *Harness) executeTool(call ToolCall) (string, error) {
 	tool, ok := h.tools[call.Function.Name]
 	if !ok {
-		return fmt.Sprintf("error: tool %q not found", call.Function.Name)
+		return "", fmt.Errorf("tool %q not found", call.Function.Name)
 	}
 
 	result, err := tool.Execute(call.Function.Arguments)
 	if err != nil {
-		return fmt.Sprintf("error: %s", err.Error())
+		return fmt.Sprintf("error: %s", err.Error()), nil
 	}
-	return result
+	return result, nil
 }
