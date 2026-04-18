@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"agentHarness/internal/types"
 )
 
 type funcTool[P any] struct {
@@ -27,7 +29,7 @@ func (t *funcTool[P]) Execute(ctx context.Context, args string) (string, error) 
 	return t.handler(ctx, params)
 }
 
-func Func[P any](name, description string, handler func(context.Context, P) (string, error)) Tool {
+func Func[P any](name, description string, handler func(context.Context, P) (string, error)) types.Tool {
 	var zero P
 	schema := buildSchema(name, description, reflect.TypeOf(zero))
 	return &funcTool[P]{name: name, schema: schema, handler: handler}

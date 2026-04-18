@@ -1,4 +1,9 @@
-package agent
+package types
+
+import (
+	"context"
+	"encoding/json"
+)
 
 type Message struct {
 	Role       string     `json:"role"`
@@ -28,4 +33,10 @@ func SystemMessage(content string) Message {
 
 func ToolResultMessage(toolCallID, content string) Message {
 	return Message{Role: "tool", Content: &content, ToolCallID: toolCallID}
+}
+
+type Tool interface {
+	Name() string
+	Schema() json.RawMessage
+	Execute(ctx context.Context, args string) (string, error)
 }

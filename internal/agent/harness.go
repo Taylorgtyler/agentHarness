@@ -2,43 +2,39 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"golang.org/x/sync/errgroup"
+
+	"agentHarness/internal/provider"
+	"agentHarness/internal/types"
 )
 
 type Harness struct {
-	messages []Message
-	tools    map[string]Tool
-	model    string
-	apiKey   string
-	baseURL  string
+	messages []types.Message
+	tools    map[string]types.Tool
+	provider provider.Provider
 	maxSteps int
+	log      *slog.Logger
 }
 
-type Tool interface {
-	Name() string
-	Schema() json.RawMessage
-	Execute(ctx context.Context, args string) (string, error)
-}
-
-func New(model, baseURL string) *Harness {
+func New(p provider.Provider) *Harness {
 	return &Harness{
-		tools:   make(map[string]Tool),
-		model:   model,
-		baseURL: baseURL,
+		tools:    make(map[string]types.Tool),
+		provider: p,
+		log:      slog.Default(),
 	}
 }
 
-func (h *Harness) WithAPIKey(key string) *Harness {
-	h.apiKey = key
+func (h *Harness) WithLogger(l *slog.Logger) *Harness {
+	h.log = l
 	return h
 }
 
 func (h *Harness) WithSystemPrompt(prompt string) *Harness {
-	h.messages = append([]Message{SystemMessage(prompt)}, h.messages...)
+	h.messages = append([]types.Message{types.SystemMessage(prompt)}, h.messages...)
 	return h
 }
 
@@ -47,7 +43,7 @@ func (h *Harness) WithMaxSteps(maxSteps int) *Harness {
 	return h
 }
 
-func (h *Harness) RegisterTool(t Tool) {
+func (h *Harness) RegisterTool(t types.Tool) {
 	h.tools[t.Name()] = t
 }
 
@@ -62,11 +58,19 @@ func (h *Harness) RunBackground(task string) (string, error) {
 }
 
 func (h *Harness) Run(ctx context.Context, task string) (string, error) {
-	h.messages = append(h.messages, UserMessage(task))
+	h.log.InfoContext(ctx, "starting run", "task", task, "max_steps", h.maxSteps)
+	h.messages = append(h.messages, types.UserMessage(task))
+
+	tools := make([]types.Tool, 0, len(h.tools))
+	for _, t := range h.tools {
+		tools = append(tools, t)
+	}
 
 	for step := 0; step < h.maxSteps; step++ {
-		response, err := h.callAPI()
+		h.log.DebugContext(ctx, "invoking provider", "step", step)
+		response, err := h.provider.Invoke(ctx, h.messages, tools)
 		if err != nil {
+			h.log.ErrorContext(ctx, "provider invocation failed", "step", step, "err", err)
 			return "", fmt.Errorf("api call failed at step %d: %w", step, err)
 		}
 
@@ -76,10 +80,12 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 			if response.Content == nil {
 				return "", errors.New("assistant returned no content and no tool calls")
 			}
+			h.log.InfoContext(ctx, "run complete", "steps", step+1)
 			return *response.Content, nil
 		}
 
-		results := make([]Message, len(response.ToolCalls))
+		h.log.DebugContext(ctx, "executing tools", "step", step, "count", len(response.ToolCalls))
+		results := make([]types.Message, len(response.ToolCalls))
 		g, gctx := errgroup.WithContext(ctx)
 		for i, call := range response.ToolCalls {
 			g.Go(func() error {
@@ -87,7 +93,7 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 				if err != nil {
 					return err
 				}
-				results[i] = ToolResultMessage(call.ID, result)
+				results[i] = types.ToolResultMessage(call.ID, result)
 				return nil
 			})
 		}
@@ -97,18 +103,22 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 		h.messages = append(h.messages, results...)
 	}
 
+	h.log.WarnContext(ctx, "exceeded max steps", "max_steps", h.maxSteps)
 	return "", fmt.Errorf("exceeded max steps (%d)", h.maxSteps)
 }
 
-func (h *Harness) executeTool(ctx context.Context, call ToolCall) (string, error) {
+func (h *Harness) executeTool(ctx context.Context, call types.ToolCall) (string, error) {
 	tool, ok := h.tools[call.Function.Name]
 	if !ok {
 		return "", fmt.Errorf("tool %q not found", call.Function.Name)
 	}
 
+	h.log.DebugContext(ctx, "executing tool", "tool", call.Function.Name, "args", call.Function.Arguments)
 	result, err := tool.Execute(ctx, call.Function.Arguments)
 	if err != nil {
+		h.log.WarnContext(ctx, "tool execution error", "tool", call.Function.Name, "err", err)
 		return fmt.Sprintf("error: %s", err.Error()), nil
 	}
+	h.log.DebugContext(ctx, "tool result", "tool", call.Function.Name, "result", result)
 	return result, nil
 }
