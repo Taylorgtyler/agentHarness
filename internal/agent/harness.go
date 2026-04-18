@@ -23,10 +23,9 @@ type Tool interface {
 
 func New(model, baseURL string) *Harness {
 	return &Harness{
-		tools:    make(map[string]Tool),
-		model:    model,
-		baseURL:  baseURL,
-		maxSteps: 20,
+		tools:   make(map[string]Tool),
+		model:   model,
+		baseURL: baseURL,
 	}
 }
 
@@ -37,6 +36,11 @@ func (h *Harness) WithAPIKey(key string) *Harness {
 
 func (h *Harness) WithSystemPrompt(prompt string) *Harness {
 	h.messages = append([]Message{SystemMessage(prompt)}, h.messages...)
+	return h
+}
+
+func (h *Harness) WithMaxSteps(maxSteps int) *Harness {
+	h.maxSteps = maxSteps
 	return h
 }
 
