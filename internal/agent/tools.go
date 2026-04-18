@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -10,23 +11,23 @@ import (
 type funcTool[P any] struct {
 	name    string
 	schema  json.RawMessage
-	handler func(P) (string, error)
+	handler func(context.Context, P) (string, error)
 }
 
 func (t *funcTool[P]) Name() string            { return t.name }
 func (t *funcTool[P]) Schema() json.RawMessage { return t.schema }
 
-func (t *funcTool[P]) Execute(args string) (string, error) {
+func (t *funcTool[P]) Execute(ctx context.Context, args string) (string, error) {
 	var params P
 	if args != "" && args != "null" && args != "{}" {
 		if err := json.Unmarshal([]byte(args), &params); err != nil {
 			return "", fmt.Errorf("invalid args: %w", err)
 		}
 	}
-	return t.handler(params)
+	return t.handler(ctx, params)
 }
 
-func Func[P any](name, description string, handler func(P) (string, error)) Tool {
+func Func[P any](name, description string, handler func(context.Context, P) (string, error)) Tool {
 	var zero P
 	schema := buildSchema(name, description, reflect.TypeOf(zero))
 	return &funcTool[P]{name: name, schema: schema, handler: handler}

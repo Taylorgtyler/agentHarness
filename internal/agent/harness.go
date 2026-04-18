@@ -1,9 +1,12 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type Harness struct {
@@ -18,7 +21,7 @@ type Harness struct {
 type Tool interface {
 	Name() string
 	Schema() json.RawMessage
-	Execute(args string) (string, error)
+	Execute(ctx context.Context, args string) (string, error)
 }
 
 func New(model, baseURL string) *Harness {
@@ -48,13 +51,17 @@ func (h *Harness) RegisterTool(t Tool) {
 	h.tools[t.Name()] = t
 }
 
-func (h *Harness) RegisterFunc(name, description string, fn func() string) {
-	h.RegisterTool(Func(name, description, func(struct{}) (string, error) {
-		return fn(), nil
+func (h *Harness) RegisterFunc(name, description string, fn func(context.Context) string) {
+	h.RegisterTool(Func(name, description, func(ctx context.Context, _ struct{}) (string, error) {
+		return fn(ctx), nil
 	}))
 }
 
-func (h *Harness) Run(task string) (string, error) {
+func (h *Harness) RunBackground(task string) (string, error) {
+	return h.Run(context.Background(), task)
+}
+
+func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 	h.messages = append(h.messages, UserMessage(task))
 
 	for step := 0; step < h.maxSteps; step++ {
@@ -72,25 +79,34 @@ func (h *Harness) Run(task string) (string, error) {
 			return *response.Content, nil
 		}
 
-		for _, call := range response.ToolCalls {
-			result, err := h.executeTool(call)
-			if err != nil {
-				return "", err
-			}
-			h.messages = append(h.messages, ToolResultMessage(call.ID, result))
+		results := make([]Message, len(response.ToolCalls))
+		g, gctx := errgroup.WithContext(ctx)
+		for i, call := range response.ToolCalls {
+			g.Go(func() error {
+				result, err := h.executeTool(gctx, call)
+				if err != nil {
+					return err
+				}
+				results[i] = ToolResultMessage(call.ID, result)
+				return nil
+			})
 		}
+		if err := g.Wait(); err != nil {
+			return "", err
+		}
+		h.messages = append(h.messages, results...)
 	}
 
 	return "", fmt.Errorf("exceeded max steps (%d)", h.maxSteps)
 }
 
-func (h *Harness) executeTool(call ToolCall) (string, error) {
+func (h *Harness) executeTool(ctx context.Context, call ToolCall) (string, error) {
 	tool, ok := h.tools[call.Function.Name]
 	if !ok {
 		return "", fmt.Errorf("tool %q not found", call.Function.Name)
 	}
 
-	result, err := tool.Execute(call.Function.Arguments)
+	result, err := tool.Execute(ctx, call.Function.Arguments)
 	if err != nil {
 		return fmt.Sprintf("error: %s", err.Error()), nil
 	}
