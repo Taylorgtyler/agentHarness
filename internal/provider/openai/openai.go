@@ -56,7 +56,7 @@ type chatResponse struct {
 	} `json:"usage"`
 }
 
-func (p *Provider) Invoke(_ context.Context, messages []types.Message, tools []types.Tool) (types.Message, error) {
+func (p *Provider) Invoke(ctx context.Context, messages []types.Message, tools []types.Tool) (types.Message, error) {
 	schemas := make([]toolSchema, 0, len(tools))
 	for _, t := range tools {
 		schemas = append(schemas, toolSchema{Type: "function", Function: t.Schema()})
@@ -73,7 +73,7 @@ func (p *Provider) Invoke(_ context.Context, messages []types.Message, tools []t
 		return types.Message{}, err
 	}
 
-	req, err := http.NewRequest("POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return types.Message{}, err
 	}
