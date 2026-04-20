@@ -106,16 +106,16 @@ func (os *otelSpan) TraceIDs() (string, string) {
 }
 
 func toOtelAttr(a tracing.Attr) attribute.KeyValue {
-	switch v := a.Value.(type) {
+	switch v := a.Value().(type) {
 	case string:
-		return attribute.String(a.Key, v)
+		return attribute.String(a.Key(), v)
 	case int:
-		return attribute.Int(a.Key, v)
+		return attribute.Int(a.Key(), v)
 	case bool:
-		return attribute.Bool(a.Key, v)
+		return attribute.Bool(a.Key(), v)
 	case float64:
-		return attribute.Float64(a.Key, v)
+		return attribute.Float64(a.Key(), v)
 	default:
-		return attribute.String(a.Key, fmt.Sprintf("%v", v))
+		return attribute.String(a.Key(), fmt.Sprintf("%v", v))
 	}
 }
