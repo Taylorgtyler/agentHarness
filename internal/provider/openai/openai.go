@@ -50,6 +50,10 @@ type chatResponse struct {
 	Choices []struct {
 		Message types.Message `json:"message"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
 }
 
 func (p *Provider) Invoke(_ context.Context, messages []types.Message, tools []types.Tool) (types.Message, error) {
@@ -102,5 +106,12 @@ func (p *Provider) Invoke(_ context.Context, messages []types.Message, tools []t
 		return types.Message{}, errors.New("no choices in response")
 	}
 
-	return parsed.Choices[0].Message, nil
+	msg := parsed.Choices[0].Message
+	if parsed.Usage.PromptTokens > 0 || parsed.Usage.CompletionTokens > 0 {
+		msg.Usage = &types.Usage{
+			PromptTokens:     parsed.Usage.PromptTokens,
+			CompletionTokens: parsed.Usage.CompletionTokens,
+		}
+	}
+	return msg, nil
 }

@@ -5,11 +5,17 @@ import (
 	"encoding/json"
 )
 
+type Usage struct {
+	PromptTokens     int
+	CompletionTokens int
+}
+
 type Message struct {
 	Role       string     `json:"role"`
 	Content    *string    `json:"content,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Usage      *Usage     `json:"usage,omitempty"`
 }
 
 type ToolCall struct {
