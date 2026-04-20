@@ -94,6 +94,10 @@ func (h *Harness) RunBackground(task string) (string, error) {
 }
 
 func (h *Harness) Run(ctx context.Context, task string) (string, error) {
+	if h.maxSteps <= 0 {
+		return "", errors.New("maxSteps must be greater than 0; use WithMaxSteps to configure")
+	}
+
 	ctx, span := h.tracer.Start(ctx, "agent.run",
 		tracing.String("task", task),
 		tracing.Int("max_steps", h.maxSteps),
@@ -102,7 +106,10 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 
 	log := spanLogger(span, h.log)
 	log.InfoContext(ctx, "starting run", "task", task, "max_steps", h.maxSteps)
-	h.messages = append(h.messages, types.UserMessage(task))
+
+	messages := make([]types.Message, len(h.messages), len(h.messages)+1)
+	copy(messages, h.messages)
+	messages = append(messages, types.UserMessage(task))
 
 	tools := make([]types.Tool, 0, len(h.tools))
 	for _, t := range h.tools {
@@ -116,7 +123,7 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 			tracing.Int("step", step),
 		)
 		response, err := retry.Do(invokeCtx, h.retryCfg, func() (types.Message, error) {
-			return h.provider.Invoke(invokeCtx, h.messages, tools)
+			return h.provider.Invoke(invokeCtx, messages, tools)
 		})
 		if err != nil {
 			invokeSpan.RecordError(err)
@@ -130,10 +137,14 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 				tracing.Int("prompt_tokens", response.Usage.PromptTokens),
 				tracing.Int("completion_tokens", response.Usage.CompletionTokens),
 			)
+			log.DebugContext(ctx, "provider response", "step", step,
+				"prompt_tokens", response.Usage.PromptTokens,
+				"completion_tokens", response.Usage.CompletionTokens,
+			)
 		}
 		invokeSpan.End()
 
-		h.messages = append(h.messages, response)
+		messages = append(messages, response)
 
 		if len(response.ToolCalls) == 0 {
 			if response.Content == nil {
@@ -162,7 +173,7 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 			span.SetStatus(err)
 			return "", err
 		}
-		h.messages = append(h.messages, results...)
+		messages = append(messages, results...)
 	}
 
 	err := fmt.Errorf("exceeded max steps (%d)", h.maxSteps)
