@@ -27,6 +27,14 @@ func (p *Provider) WithAPIKey(key string) *Provider {
 	return p
 }
 
+type APIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string   { return fmt.Sprintf("api returned %d: %s", e.StatusCode, e.Body) }
+func (e *APIError) Retryable() bool { return e.StatusCode == 429 || e.StatusCode >= 500 }
+
 type chatRequest struct {
 	Model    string          `json:"model"`
 	Messages []types.Message `json:"messages"`
@@ -82,7 +90,7 @@ func (p *Provider) Invoke(_ context.Context, messages []types.Message, tools []t
 	}
 
 	if resp.StatusCode != 200 {
-		return types.Message{}, fmt.Errorf("api returned %d: %s", resp.StatusCode, string(respBody))
+		return types.Message{}, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	var parsed chatResponse
