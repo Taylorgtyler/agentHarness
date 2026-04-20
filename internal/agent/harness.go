@@ -9,15 +9,17 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"agentHarness/internal/provider"
+	"agentHarness/internal/retry"
 	"agentHarness/internal/types"
 )
 
 type Harness struct {
-	messages []types.Message
-	tools    map[string]types.Tool
-	provider provider.Provider
-	maxSteps int
-	log      *slog.Logger
+	messages  []types.Message
+	tools     map[string]types.Tool
+	provider  provider.Provider
+	maxSteps  int
+	retryCfg  retry.Config
+	log       *slog.Logger
 }
 
 func New(p provider.Provider) *Harness {
@@ -40,6 +42,11 @@ func (h *Harness) WithSystemPrompt(prompt string) *Harness {
 
 func (h *Harness) WithMaxSteps(maxSteps int) *Harness {
 	h.maxSteps = maxSteps
+	return h
+}
+
+func (h *Harness) WithRetry(cfg retry.Config) *Harness {
+	h.retryCfg = cfg
 	return h
 }
 
@@ -68,7 +75,9 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 
 	for step := 0; step < h.maxSteps; step++ {
 		h.log.DebugContext(ctx, "invoking provider", "step", step)
-		response, err := h.provider.Invoke(ctx, h.messages, tools)
+		response, err := retry.Do(ctx, h.retryCfg, func() (types.Message, error) {
+			return h.provider.Invoke(ctx, h.messages, tools)
+		})
 		if err != nil {
 			h.log.ErrorContext(ctx, "provider invocation failed", "step", step, "err", err)
 			return "", fmt.Errorf("api call failed at step %d: %w", step, err)
@@ -114,7 +123,9 @@ func (h *Harness) executeTool(ctx context.Context, call types.ToolCall) (string,
 	}
 
 	h.log.DebugContext(ctx, "executing tool", "tool", call.Function.Name, "args", call.Function.Arguments)
-	result, err := tool.Execute(ctx, call.Function.Arguments)
+	result, err := retry.Do(ctx, h.retryCfg, func() (string, error) {
+		return tool.Execute(ctx, call.Function.Arguments)
+	})
 	if err != nil {
 		h.log.WarnContext(ctx, "tool execution error", "tool", call.Function.Name, "err", err)
 		return fmt.Sprintf("error: %s", err.Error()), nil
