@@ -69,6 +69,27 @@ func (h *Harness) RegisterFunc(name, description string, fn func(context.Context
 	}))
 }
 
+func (h *Harness) AsTool(name, description string) types.Tool {
+	type params struct {
+		Task string `json:"task" desc:"The task for the sub-agent to perform"`
+	}
+	initMessages := make([]types.Message, len(h.messages))
+	copy(initMessages, h.messages)
+
+	return Func(name, description, func(ctx context.Context, p params) (string, error) {
+		sub := &Harness{
+			messages: append([]types.Message(nil), initMessages...),
+			tools:    h.tools,
+			provider: h.provider,
+			maxSteps: h.maxSteps,
+			retryCfg: h.retryCfg,
+			tracer:   h.tracer,
+			log:      h.log,
+		}
+		return sub.Run(ctx, p.Task)
+	})
+}
+
 func (h *Harness) RunBackground(task string) (string, error) {
 	return h.Run(context.Background(), task)
 }
