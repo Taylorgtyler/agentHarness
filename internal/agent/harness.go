@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 
 	"agentHarness/internal/provider"
 	"agentHarness/internal/retry"
+	"agentHarness/internal/tracing"
 	"agentHarness/internal/types"
 )
 
@@ -22,7 +20,7 @@ type Harness struct {
 	provider provider.Provider
 	maxSteps int
 	retryCfg retry.Config
-	tracer   trace.Tracer
+	tracer   tracing.Tracer
 	log      *slog.Logger
 }
 
@@ -30,6 +28,7 @@ func New(p provider.Provider) *Harness {
 	return &Harness{
 		tools:    make(map[string]types.Tool),
 		provider: p,
+		tracer:   tracing.Noop,
 		log:      slog.Default(),
 	}
 }
@@ -39,7 +38,7 @@ func (h *Harness) WithLogger(l *slog.Logger) *Harness {
 	return h
 }
 
-func (h *Harness) WithTracer(t trace.Tracer) *Harness {
+func (h *Harness) WithTracer(t tracing.Tracer) *Harness {
 	h.tracer = t
 	return h
 }
@@ -95,13 +94,13 @@ func (h *Harness) RunBackground(task string) (string, error) {
 }
 
 func (h *Harness) Run(ctx context.Context, task string) (string, error) {
-	ctx, span := h.startSpan(ctx, "agent.run",
-		attribute.String("task", task),
-		attribute.Int("max_steps", h.maxSteps),
+	ctx, span := h.tracer.Start(ctx, "agent.run",
+		tracing.String("task", task),
+		tracing.Int("max_steps", h.maxSteps),
 	)
 	defer span.End()
 
-	log := spanLogger(ctx, h.log)
+	log := spanLogger(span, h.log)
 	log.InfoContext(ctx, "starting run", "task", task, "max_steps", h.maxSteps)
 	h.messages = append(h.messages, types.UserMessage(task))
 
@@ -113,23 +112,23 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 	for step := 0; step < h.maxSteps; step++ {
 		log.DebugContext(ctx, "invoking provider", "step", step)
 
-		invokeCtx, invokeSpan := h.startSpan(ctx, "provider.invoke",
-			attribute.Int("step", step),
+		invokeCtx, invokeSpan := h.tracer.Start(ctx, "provider.invoke",
+			tracing.Int("step", step),
 		)
 		response, err := retry.Do(invokeCtx, h.retryCfg, func() (types.Message, error) {
 			return h.provider.Invoke(invokeCtx, h.messages, tools)
 		})
 		if err != nil {
 			invokeSpan.RecordError(err)
-			invokeSpan.SetStatus(codes.Error, err.Error())
+			invokeSpan.SetStatus(err)
 			invokeSpan.End()
 			log.ErrorContext(ctx, "provider invocation failed", "step", step, "err", err)
 			return "", fmt.Errorf("api call failed at step %d: %w", step, err)
 		}
 		if response.Usage != nil {
 			invokeSpan.SetAttributes(
-				attribute.Int("prompt_tokens", response.Usage.PromptTokens),
-				attribute.Int("completion_tokens", response.Usage.CompletionTokens),
+				tracing.Int("prompt_tokens", response.Usage.PromptTokens),
+				tracing.Int("completion_tokens", response.Usage.CompletionTokens),
 			)
 		}
 		invokeSpan.End()
@@ -140,7 +139,7 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 			if response.Content == nil {
 				return "", errors.New("assistant returned no content and no tool calls")
 			}
-			span.SetAttributes(attribute.Int("steps", step+1))
+			span.SetAttributes(tracing.Int("steps", step+1))
 			log.InfoContext(ctx, "run complete", "steps", step+1)
 			return *response.Content, nil
 		}
@@ -160,14 +159,14 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 		}
 		if err := g.Wait(); err != nil {
 			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(err)
 			return "", err
 		}
 		h.messages = append(h.messages, results...)
 	}
 
 	err := fmt.Errorf("exceeded max steps (%d)", h.maxSteps)
-	span.SetStatus(codes.Error, err.Error())
+	span.SetStatus(err)
 	log.WarnContext(ctx, "exceeded max steps", "max_steps", h.maxSteps)
 	return "", err
 }
@@ -178,19 +177,19 @@ func (h *Harness) executeTool(ctx context.Context, call types.ToolCall) (string,
 		return "", fmt.Errorf("tool %q not found", call.Function.Name)
 	}
 
-	ctx, span := h.startSpan(ctx, "tool.execute",
-		attribute.String("tool", call.Function.Name),
+	ctx, span := h.tracer.Start(ctx, "tool.execute",
+		tracing.String("tool", call.Function.Name),
 	)
 	defer span.End()
 
-	log := spanLogger(ctx, h.log)
+	log := spanLogger(span, h.log)
 	log.DebugContext(ctx, "executing tool", "tool", call.Function.Name, "args", call.Function.Arguments)
 	result, err := retry.Do(ctx, h.retryCfg, func() (string, error) {
 		return tool.Execute(ctx, call.Function.Arguments)
 	})
 	if err != nil {
 		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(err)
 		log.WarnContext(ctx, "tool execution error", "tool", call.Function.Name, "err", err)
 		return fmt.Sprintf("error: %s", err.Error()), nil
 	}
@@ -198,23 +197,10 @@ func (h *Harness) executeTool(ctx context.Context, call types.ToolCall) (string,
 	return result, nil
 }
 
-// startSpan starts a span if a tracer is configured, otherwise returns a noop span.
-func (h *Harness) startSpan(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
-	if h.tracer == nil {
-		return ctx, trace.SpanFromContext(ctx)
-	}
-	return h.tracer.Start(ctx, name, trace.WithAttributes(attrs...))
-}
-
-// spanLogger returns a logger enriched with trace_id and span_id when a valid span is active,
-// correlating log lines with traces in the observability backend.
-func spanLogger(ctx context.Context, log *slog.Logger) *slog.Logger {
-	sc := trace.SpanFromContext(ctx).SpanContext()
-	if !sc.IsValid() {
+func spanLogger(span tracing.Span, log *slog.Logger) *slog.Logger {
+	traceID, spanID := span.TraceIDs()
+	if traceID == "" {
 		return log
 	}
-	return log.With(
-		"trace_id", sc.TraceID().String(),
-		"span_id", sc.SpanID().String(),
-	)
+	return log.With("trace_id", traceID, "span_id", spanID)
 }
