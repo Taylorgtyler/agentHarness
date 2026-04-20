@@ -50,7 +50,10 @@ func buildSchema(name, description string, t reflect.Type) json.RawMessage {
 			optional := false
 			if tag := field.Tag.Get("json"); tag != "" {
 				parts := strings.Split(tag, ",")
-				if parts[0] != "" && parts[0] != "-" {
+				if parts[0] == "-" {
+					continue
+				}
+				if parts[0] != "" {
 					jsonName = parts[0]
 				}
 				optional = strings.Contains(tag, "omitempty")
