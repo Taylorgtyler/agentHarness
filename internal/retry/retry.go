@@ -64,7 +64,11 @@ func shouldRetry(err error, retryUnknown bool) bool {
 }
 
 func backoff(cfg Config, attempt int) time.Duration {
-	delay := float64(cfg.InitialDelay) * math.Pow(cfg.Multiplier, float64(attempt))
+	multiplier := cfg.Multiplier
+	if multiplier == 0 {
+		multiplier = 1
+	}
+	delay := float64(cfg.InitialDelay) * math.Pow(multiplier, float64(attempt))
 	if max := float64(cfg.MaxDelay); delay > max {
 		delay = max
 	}
