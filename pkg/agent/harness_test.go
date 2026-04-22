@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/taylortyler/agentHarness/pkg/agent"
-	"github.com/taylortyler/agentHarness/pkg/types"
+	"github.com/taylorgtyler/agentHarness/pkg/agent"
+	"github.com/taylorgtyler/agentHarness/pkg/types"
 )
 
 type testProvider struct {

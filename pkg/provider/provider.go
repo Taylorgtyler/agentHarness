@@ -3,7 +3,7 @@ package provider
 import (
 	"context"
 
-	"github.com/taylortyler/agentHarness/pkg/types"
+	"github.com/taylorgtyler/agentHarness/pkg/types"
 )
 
 type Provider interface {

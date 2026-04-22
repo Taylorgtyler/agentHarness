@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/taylortyler/agentHarness/pkg/agent"
+	"github.com/taylorgtyler/agentHarness/pkg/agent"
 )
 
 type schemaDoc struct {

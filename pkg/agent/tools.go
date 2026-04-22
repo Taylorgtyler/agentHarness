@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/taylortyler/agentHarness/pkg/types"
+	"github.com/taylorgtyler/agentHarness/pkg/types"
 )
 
 type funcTool[P any] struct {

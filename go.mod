@@ -1,4 +1,4 @@
-module github.com/taylortyler/agentHarness
+module github.com/taylorgtyler/agentHarness
 
 go 1.25.5
 
