@@ -8,10 +8,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"agentHarness/internal/provider"
-	"agentHarness/internal/retry"
-	"agentHarness/internal/tracing"
-	"agentHarness/internal/types"
+	"github.com/taylortyler/agentHarness/pkg/provider"
+	"github.com/taylortyler/agentHarness/pkg/retry"
+	"github.com/taylortyler/agentHarness/pkg/tracing"
+	"github.com/taylortyler/agentHarness/pkg/types"
 )
 
 type Harness struct {
