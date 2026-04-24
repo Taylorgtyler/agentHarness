@@ -93,7 +93,20 @@ func (h *Harness) RunBackground(task string) (string, error) {
 	return h.Run(context.Background(), task)
 }
 
+// invokeFn performs one provider turn: send messages/tools, return the assistant
+// reply. Implementations own their own retry policy because streaming and
+// non-streaming retry differently (see terminalStreamError).
+type invokeFn func(ctx context.Context, log *slog.Logger, messages []types.Message, tools []types.Tool) (types.Message, error)
+
 func (h *Harness) Run(ctx context.Context, task string) (string, error) {
+	return h.run(ctx, task, "sync", func(ctx context.Context, _ *slog.Logger, messages []types.Message, tools []types.Tool) (types.Message, error) {
+		return retry.Do(ctx, h.retryCfg, func() (types.Message, error) {
+			return h.provider.Invoke(ctx, messages, tools)
+		})
+	})
+}
+
+func (h *Harness) run(ctx context.Context, task, mode string, invoke invokeFn) (string, error) {
 	if h.maxSteps <= 0 {
 		return "", errors.New("maxSteps must be greater than 0; use WithMaxSteps to configure")
 	}
@@ -101,11 +114,12 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 	ctx, span := h.tracer.Start(ctx, "agent.run",
 		tracing.String("task", task),
 		tracing.Int("max_steps", h.maxSteps),
+		tracing.String("mode", mode),
 	)
 	defer span.End()
 
 	log := spanLogger(span, h.log)
-	log.InfoContext(ctx, "starting run", "task", task, "max_steps", h.maxSteps)
+	log.InfoContext(ctx, "starting run", "task", task, "max_steps", h.maxSteps, "mode", mode)
 
 	messages := make([]types.Message, len(h.messages), len(h.messages)+1)
 	copy(messages, h.messages)
@@ -122,9 +136,7 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 		invokeCtx, invokeSpan := h.tracer.Start(ctx, "provider.invoke",
 			tracing.Int("step", step),
 		)
-		response, err := retry.Do(invokeCtx, h.retryCfg, func() (types.Message, error) {
-			return h.provider.Invoke(invokeCtx, messages, tools)
-		})
+		response, err := invoke(invokeCtx, log, messages, tools)
 		if err != nil {
 			invokeSpan.RecordError(err)
 			invokeSpan.SetStatus(err)
