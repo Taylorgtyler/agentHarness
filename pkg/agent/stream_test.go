@@ -1,3 +1,19 @@
+/*
+Copyright 2026 Taylor Tyler
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package agent_test
 
 import (
@@ -23,7 +39,7 @@ func (e *retryableError) Retryable() bool { return true }
 // InvokeStream call consumes the next scripted response.
 type streamProvider struct {
 	streams   [][]types.StreamChunk // one slice per call
-	fallbacks []types.Message          // used when Invoke is called (non-stream fallback path)
+	fallbacks []types.Message       // used when Invoke is called (non-stream fallback path)
 	mu        sync.Mutex
 	streamErr error
 	delay     time.Duration // per-chunk delay, useful for cancellation tests
