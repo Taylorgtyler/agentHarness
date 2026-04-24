@@ -140,12 +140,12 @@ func TestRun_MultipleToolCalls(t *testing.T) {
 }
 
 // TestRun_MaxStepsZero verifies that explicitly setting maxSteps <= 0 returns
-// an error before invoking the provider.
+// ErrInvalidMaxSteps before invoking the provider.
 func TestRun_MaxStepsZero(t *testing.T) {
 	p := &testProvider{}
 	_, err := agent.New(p).WithMaxSteps(0).Run(context.Background(), "task")
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	if !errors.Is(err, agent.ErrInvalidMaxSteps) {
+		t.Fatalf("expected ErrInvalidMaxSteps, got: %v", err)
 	}
 	if len(p.calls) != 0 {
 		t.Fatal("provider should not be called when maxSteps <= 0")
@@ -231,8 +231,8 @@ func TestRun_ExceedsMaxSteps(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "exceeded max steps") {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, agent.ErrMaxStepsExceeded) {
+		t.Fatalf("expected ErrMaxStepsExceeded, got: %v", err)
 	}
 }
 
@@ -248,7 +248,8 @@ func TestRun_ProviderError(t *testing.T) {
 	}
 }
 
-// TestRun_UnknownTool verifies that calling an unregistered tool hard-errors Run.
+// TestRun_UnknownTool verifies that calling an unregistered tool hard-errors
+// Run with ErrToolNotFound.
 func TestRun_UnknownTool(t *testing.T) {
 	p := &testProvider{
 		responses: []types.Message{
@@ -256,8 +257,8 @@ func TestRun_UnknownTool(t *testing.T) {
 		},
 	}
 	_, err := newHarness(p).Run(context.Background(), "task")
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	if !errors.Is(err, agent.ErrToolNotFound) {
+		t.Fatalf("expected ErrToolNotFound, got: %v", err)
 	}
 }
 
@@ -360,8 +361,8 @@ func TestRun_EmptyResponse(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "no content and no tool calls") {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, agent.ErrEmptyResponse) {
+		t.Fatalf("expected ErrEmptyResponse, got: %v", err)
 	}
 }
 

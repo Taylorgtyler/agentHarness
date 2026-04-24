@@ -29,6 +29,26 @@ type Harness struct {
 // letting a runaway loop burn tokens indefinitely.
 const DefaultMaxSteps = 10
 
+// Sentinel errors returned by Run / RunStream. Callers can use errors.Is to
+// distinguish them from provider or tool errors.
+var (
+	// ErrInvalidMaxSteps is returned when Run is called with maxSteps <= 0.
+	ErrInvalidMaxSteps = errors.New("maxSteps must be greater than 0")
+
+	// ErrMaxStepsExceeded is returned when the model keeps requesting tools
+	// and the step budget is exhausted before a final response.
+	ErrMaxStepsExceeded = errors.New("exceeded max steps")
+
+	// ErrEmptyResponse is returned when the assistant returns a message with
+	// neither content nor tool calls — usually a provider bug or an
+	// over-aggressive safety filter.
+	ErrEmptyResponse = errors.New("assistant returned no content and no tool calls")
+
+	// ErrToolNotFound is returned when the model requests a tool the harness
+	// does not have registered.
+	ErrToolNotFound = errors.New("tool not found")
+)
+
 func New(p provider.Provider) *Harness {
 	return &Harness{
 		tools:    make(map[string]types.Tool),
@@ -129,7 +149,7 @@ func (h *Harness) Run(ctx context.Context, task string) (string, error) {
 
 func (h *Harness) run(ctx context.Context, task, mode string, invoke invokeFn) (string, error) {
 	if h.maxSteps <= 0 {
-		return "", errors.New("maxSteps must be greater than 0; use WithMaxSteps to configure")
+		return "", fmt.Errorf("%w; use WithMaxSteps to configure", ErrInvalidMaxSteps)
 	}
 
 	ctx, span := h.tracer.Start(ctx, "agent.run",
@@ -181,7 +201,7 @@ func (h *Harness) run(ctx context.Context, task, mode string, invoke invokeFn) (
 
 		if len(response.ToolCalls) == 0 {
 			if response.Content == nil {
-				return "", errors.New("assistant returned no content and no tool calls")
+				return "", ErrEmptyResponse
 			}
 			span.SetAttributes(tracing.Int("steps", step+1))
 			log.InfoContext(ctx, "run complete", "steps", step+1)
@@ -209,7 +229,7 @@ func (h *Harness) run(ctx context.Context, task, mode string, invoke invokeFn) (
 		messages = append(messages, results...)
 	}
 
-	err := fmt.Errorf("exceeded max steps (%d)", h.maxSteps)
+	err := fmt.Errorf("%w (%d)", ErrMaxStepsExceeded, h.maxSteps)
 	span.SetStatus(err)
 	log.WarnContext(ctx, "exceeded max steps", "max_steps", h.maxSteps)
 	return "", err
@@ -218,7 +238,7 @@ func (h *Harness) run(ctx context.Context, task, mode string, invoke invokeFn) (
 func (h *Harness) executeTool(ctx context.Context, call types.ToolCall) (string, error) {
 	tool, ok := h.tools[call.Function.Name]
 	if !ok {
-		return "", fmt.Errorf("tool %q not found", call.Function.Name)
+		return "", fmt.Errorf("%w: %q", ErrToolNotFound, call.Function.Name)
 	}
 
 	ctx, span := h.tracer.Start(ctx, "tool.execute",
