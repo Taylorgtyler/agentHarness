@@ -6,10 +6,26 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/taylorgtyler/agentHarness/pkg/agent"
 	"github.com/taylorgtyler/agentHarness/pkg/types"
 )
+
+// blockingProvider's Invoke blocks until ctx is cancelled or release is closed.
+// Used to hold a run open while exercising cancellation.
+type blockingProvider struct {
+	release chan struct{}
+}
+
+func (b *blockingProvider) Invoke(ctx context.Context, _ []types.Message, _ []types.Tool) (types.Message, error) {
+	select {
+	case <-ctx.Done():
+		return types.Message{}, ctx.Err()
+	case <-b.release:
+		return types.Message{}, errors.New("released")
+	}
+}
 
 type testProvider struct {
 	responses []types.Message
@@ -123,16 +139,80 @@ func TestRun_MultipleToolCalls(t *testing.T) {
 	}
 }
 
-// TestRun_MaxStepsZero verifies that maxSteps <= 0 returns an error before invoking the provider.
+// TestRun_MaxStepsZero verifies that explicitly setting maxSteps <= 0 returns
+// an error before invoking the provider.
 func TestRun_MaxStepsZero(t *testing.T) {
 	p := &testProvider{}
-	_, err := agent.New(p).Run(context.Background(), "task")
+	_, err := agent.New(p).WithMaxSteps(0).Run(context.Background(), "task")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if len(p.calls) != 0 {
 		t.Fatal("provider should not be called when maxSteps <= 0")
 	}
+}
+
+// TestRun_DefaultMaxSteps verifies that New sets a sensible default so
+// agent.New(p).Run(...) works out of the box without WithMaxSteps.
+func TestRun_DefaultMaxSteps(t *testing.T) {
+	p := &testProvider{responses: []types.Message{contentMsg("ok")}}
+	result, err := agent.New(p).Run(context.Background(), "task")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "ok" {
+		t.Fatalf("got %q, want %q", result, "ok")
+	}
+}
+
+// TestRunBackground_DeliversResult verifies that the goroutine-based runner
+// sends the result on the returned channel and closes it.
+func TestRunBackground_DeliversResult(t *testing.T) {
+	p := &testProvider{responses: []types.Message{contentMsg("async result")}}
+	h := newHarness(p)
+
+	ch := h.RunBackground(context.Background(), "task")
+	select {
+	case res, ok := <-ch:
+		if !ok {
+			t.Fatal("channel closed without a result")
+		}
+		if res.Err != nil {
+			t.Fatalf("unexpected err: %v", res.Err)
+		}
+		if res.Output != "async result" {
+			t.Fatalf("output = %q, want %q", res.Output, "async result")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunBackground did not deliver within 1s")
+	}
+
+	// Second receive should see the closed channel.
+	if _, ok := <-ch; ok {
+		t.Fatal("expected channel to be closed after result")
+	}
+}
+
+// TestRunBackground_CancelsViaContext verifies that cancelling the context
+// propagates through to the background run as an error on the channel.
+func TestRunBackground_CancelsViaContext(t *testing.T) {
+	// Use a provider that blocks forever so the run is alive when we cancel.
+	p := &blockingProvider{release: make(chan struct{})}
+	h := agent.New(p).WithMaxSteps(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := h.RunBackground(ctx, "task")
+	cancel()
+
+	select {
+	case res := <-ch:
+		if res.Err == nil {
+			t.Fatal("expected error from cancellation, got nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunBackground did not return after cancel")
+	}
+	close(p.release)
 }
 
 // TestRun_ExceedsMaxSteps verifies that Run returns an error when the model never stops calling tools.

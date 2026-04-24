@@ -24,12 +24,18 @@ type Harness struct {
 	log      *slog.Logger
 }
 
+// DefaultMaxSteps is used when the Harness is constructed without calling
+// WithMaxSteps. Chosen to cover typical multi-step tool-using agents without
+// letting a runaway loop burn tokens indefinitely.
+const DefaultMaxSteps = 10
+
 func New(p provider.Provider) *Harness {
 	return &Harness{
 		tools:    make(map[string]types.Tool),
 		provider: p,
 		tracer:   tracing.Noop,
 		log:      slog.Default(),
+		maxSteps: DefaultMaxSteps,
 	}
 }
 
@@ -89,8 +95,23 @@ func (h *Harness) AsTool(name, description string) types.Tool {
 	})
 }
 
-func (h *Harness) RunBackground(task string) (string, error) {
-	return h.Run(context.Background(), task)
+// RunResult is delivered on the channel returned by RunBackground.
+type RunResult struct {
+	Output string
+	Err    error
+}
+
+// RunBackground runs the agent in a goroutine and returns a buffered channel
+// that receives the result when the run completes. The channel is closed after
+// the single result is sent. Cancel the run via ctx.
+func (h *Harness) RunBackground(ctx context.Context, task string) <-chan RunResult {
+	ch := make(chan RunResult, 1)
+	go func() {
+		defer close(ch)
+		out, err := h.Run(ctx, task)
+		ch <- RunResult{Output: out, Err: err}
+	}()
+	return ch
 }
 
 // invokeFn performs one provider turn: send messages/tools, return the assistant
