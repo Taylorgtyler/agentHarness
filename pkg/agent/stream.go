@@ -205,7 +205,7 @@ func consumeStream(ctx context.Context, sp provider.StreamProvider, messages []t
 	}
 }
 
-func drain(ch <-chan provider.StreamChunk) {
+func drain(ch <-chan types.StreamChunk) {
 	for range ch {
 	}
 }

@@ -46,3 +46,19 @@ type Tool interface {
 	Schema() json.RawMessage
 	Execute(ctx context.Context, args string) (string, error)
 }
+
+type StreamChunk struct {
+	ContentDelta string
+	ToolCalls    []StreamToolCallFragment
+	FinishReason string
+	Usage        *Usage
+	Err          error
+}
+
+type StreamToolCallFragment struct {
+	Index     int
+	ID        string
+	Type      string
+	Name      string
+	Arguments string
+}

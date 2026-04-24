@@ -9,14 +9,13 @@ import (
 	"time"
 
 	"github.com/taylorgtyler/agentHarness/pkg/agent"
-	"github.com/taylorgtyler/agentHarness/pkg/provider"
 	"github.com/taylorgtyler/agentHarness/pkg/types"
 )
 
 // streamProvider is a test double for provider.StreamProvider. Each Invoke /
 // InvokeStream call consumes the next scripted response.
 type streamProvider struct {
-	streams   [][]provider.StreamChunk // one slice per call
+	streams   [][]types.StreamChunk // one slice per call
 	fallbacks []types.Message          // used when Invoke is called (non-stream fallback path)
 	mu        sync.Mutex
 	streamErr error
@@ -34,7 +33,7 @@ func (s *streamProvider) Invoke(_ context.Context, _ []types.Message, _ []types.
 	return r, nil
 }
 
-func (s *streamProvider) InvokeStream(ctx context.Context, _ []types.Message, _ []types.Tool) (<-chan provider.StreamChunk, error) {
+func (s *streamProvider) InvokeStream(ctx context.Context, _ []types.Message, _ []types.Tool) (<-chan types.StreamChunk, error) {
 	s.mu.Lock()
 	if s.streamErr != nil {
 		err := s.streamErr
@@ -50,7 +49,7 @@ func (s *streamProvider) InvokeStream(ctx context.Context, _ []types.Message, _ 
 	delay := s.delay
 	s.mu.Unlock()
 
-	ch := make(chan provider.StreamChunk)
+	ch := make(chan types.StreamChunk)
 	go func() {
 		defer close(ch)
 		for _, c := range chunks {
@@ -86,23 +85,23 @@ func (n *nonStreamProvider) Invoke(_ context.Context, _ []types.Message, _ []typ
 	return r, nil
 }
 
-func contentChunk(s string) provider.StreamChunk {
-	return provider.StreamChunk{ContentDelta: s}
+func contentChunk(s string) types.StreamChunk {
+	return types.StreamChunk{ContentDelta: s}
 }
 
-func toolChunk(frags ...provider.StreamToolCallFragment) provider.StreamChunk {
-	return provider.StreamChunk{ToolCalls: frags}
+func toolChunk(frags ...types.StreamToolCallFragment) types.StreamChunk {
+	return types.StreamChunk{ToolCalls: frags}
 }
 
-func finishChunk(reason string) provider.StreamChunk {
-	return provider.StreamChunk{FinishReason: reason}
+func finishChunk(reason string) types.StreamChunk {
+	return types.StreamChunk{FinishReason: reason}
 }
 
 // TestRunStream_ContentOnly verifies content deltas are forwarded to onChunk in order
 // and the full content is returned as the final result.
 func TestRunStream_ContentOnly(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{{
+		streams: [][]types.StreamChunk{{
 			contentChunk("hello "),
 			contentChunk("world"),
 			finishChunk("stop"),
@@ -128,14 +127,14 @@ func TestRunStream_ContentOnly(t *testing.T) {
 // the tool can execute.
 func TestRunStream_SingleToolCallMultiFragmentArgs(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{
+		streams: [][]types.StreamChunk{
 			{
 				// First fragment carries id/type/name, empty args.
-				toolChunk(provider.StreamToolCallFragment{Index: 0, ID: "call_1", Type: "function", Name: "echo"}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, ID: "call_1", Type: "function", Name: "echo"}),
 				// Subsequent fragments carry only argument pieces.
-				toolChunk(provider.StreamToolCallFragment{Index: 0, Arguments: `{"te`}),
-				toolChunk(provider.StreamToolCallFragment{Index: 0, Arguments: `xt":"`}),
-				toolChunk(provider.StreamToolCallFragment{Index: 0, Arguments: `hi"}`}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, Arguments: `{"te`}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, Arguments: `xt":"`}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, Arguments: `hi"}`}),
 				finishChunk("tool_calls"),
 			},
 			{
@@ -170,9 +169,9 @@ func TestRunStream_SingleToolCallMultiFragmentArgs(t *testing.T) {
 // visible content — tool-call fragments must not leak through as content.
 func TestRunStream_OnChunkNotCalledForToolCalls(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{
+		streams: [][]types.StreamChunk{
 			{
-				toolChunk(provider.StreamToolCallFragment{Index: 0, ID: "c1", Type: "function", Name: "noop", Arguments: "{}"}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, ID: "c1", Type: "function", Name: "noop", Arguments: "{}"}),
 				finishChunk("tool_calls"),
 			},
 			{
@@ -202,13 +201,13 @@ func TestRunStream_OnChunkNotCalledForToolCalls(t *testing.T) {
 // end up with the correct data.
 func TestRunStream_MultipleToolCallsOutOfOrderIndexes(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{
+		streams: [][]types.StreamChunk{
 			{
 				// Interleaved fragments across two tool calls.
-				toolChunk(provider.StreamToolCallFragment{Index: 0, ID: "c_a", Type: "function", Name: "toolA"}),
-				toolChunk(provider.StreamToolCallFragment{Index: 1, ID: "c_b", Type: "function", Name: "toolB"}),
-				toolChunk(provider.StreamToolCallFragment{Index: 1, Arguments: `{"v":"b"}`}),
-				toolChunk(provider.StreamToolCallFragment{Index: 0, Arguments: `{"v":"a"}`}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, ID: "c_a", Type: "function", Name: "toolA"}),
+				toolChunk(types.StreamToolCallFragment{Index: 1, ID: "c_b", Type: "function", Name: "toolB"}),
+				toolChunk(types.StreamToolCallFragment{Index: 1, Arguments: `{"v":"b"}`}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, Arguments: `{"v":"a"}`}),
 				finishChunk("tool_calls"),
 			},
 			{
@@ -249,13 +248,13 @@ func TestRunStream_MultipleToolCallsOutOfOrderIndexes(t *testing.T) {
 // partials[1] gets the real data).
 func TestRunStream_IndexGrowthFromOne(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{
+		streams: [][]types.StreamChunk{
 			{
 				// This is a pathological sequence: no index 0 ever appears. The assembled
 				// ToolCall at index 0 will have empty id/name and the harness will reject
 				// it via "tool not found". We use this purely to test slice growth doesn't
 				// panic.
-				toolChunk(provider.StreamToolCallFragment{Index: 2, ID: "c_c", Type: "function", Name: "toolC", Arguments: `{}`}),
+				toolChunk(types.StreamToolCallFragment{Index: 2, ID: "c_c", Type: "function", Name: "toolC", Arguments: `{}`}),
 				finishChunk("tool_calls"),
 			},
 		},
@@ -281,7 +280,7 @@ func TestRunStream_IndexGrowthFromOne(t *testing.T) {
 // causes RunStream to fail and no partial dispatch happens.
 func TestRunStream_ErrChunkMidStream(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{{
+		streams: [][]types.StreamChunk{{
 			contentChunk("partial "),
 			{Err: errors.New("network hiccup")},
 		}},
@@ -310,7 +309,7 @@ func TestRunStream_ErrChunkMidStream(t *testing.T) {
 // unblocks the consumer and returns ctx.Err().
 func TestRunStream_ContextCancellation(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{{
+		streams: [][]types.StreamChunk{{
 			contentChunk("a"),
 			contentChunk("b"),
 			contentChunk("c"),
@@ -363,10 +362,10 @@ func TestRunStream_NonStreamProviderFallback(t *testing.T) {
 // assembled message.
 func TestRunStream_MixedContentAndToolCallsSameStep(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{
+		streams: [][]types.StreamChunk{
 			{
 				contentChunk("thinking... "),
-				toolChunk(provider.StreamToolCallFragment{Index: 0, ID: "c1", Type: "function", Name: "echo", Arguments: `{"text":"x"}`}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, ID: "c1", Type: "function", Name: "echo", Arguments: `{"text":"x"}`}),
 				finishChunk("tool_calls"),
 			},
 			{
@@ -406,7 +405,7 @@ func TestRunStream_MixedContentAndToolCallsSameStep(t *testing.T) {
 // survives onto the assembled Message.
 func TestRunStream_UsagePropagated(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{{
+		streams: [][]types.StreamChunk{{
 			contentChunk("ok"),
 			{Usage: &types.Usage{PromptTokens: 10, CompletionTokens: 5}, FinishReason: "stop"},
 		}},
@@ -427,11 +426,11 @@ func TestRunStream_UsagePropagated(t *testing.T) {
 // test catches it.)
 func TestRunStream_NameOnlyOnFirstFragment(t *testing.T) {
 	p := &streamProvider{
-		streams: [][]provider.StreamChunk{
+		streams: [][]types.StreamChunk{
 			{
-				toolChunk(provider.StreamToolCallFragment{Index: 0, ID: "c1", Type: "function", Name: "echo"}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, ID: "c1", Type: "function", Name: "echo"}),
 				// Later fragment with empty Name must NOT overwrite the real name.
-				toolChunk(provider.StreamToolCallFragment{Index: 0, Arguments: `{"text":"ok"}`}),
+				toolChunk(types.StreamToolCallFragment{Index: 0, Arguments: `{"text":"ok"}`}),
 				finishChunk("tool_calls"),
 			},
 			{
