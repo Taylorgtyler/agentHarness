@@ -9,8 +9,15 @@ import (
 	"time"
 
 	"github.com/taylorgtyler/agentHarness/pkg/agent"
+	"github.com/taylorgtyler/agentHarness/pkg/retry"
 	"github.com/taylorgtyler/agentHarness/pkg/types"
 )
+
+// retryableError implements retry.Retryable so the retry package will retry it.
+type retryableError struct{ msg string }
+
+func (e *retryableError) Error() string   { return e.msg }
+func (e *retryableError) Retryable() bool { return true }
 
 // streamProvider is a test double for provider.StreamProvider. Each Invoke /
 // InvokeStream call consumes the next scripted response.
@@ -418,6 +425,83 @@ func TestRunStream_UsagePropagated(t *testing.T) {
 	// Usage lands on the span/logger path; we don't have a direct accessor here.
 	// The assertion is simply that the stream completes — usage-carrying chunks
 	// with no content/tool fields must not break consumption.
+}
+
+// TestRunStream_RetriesWhenNoContentEmitted verifies that a stream error that
+// occurs before any content is emitted is retryable — we still get resilience
+// for pre-first-token failures (connection refused, 429, auth hiccups).
+func TestRunStream_RetriesWhenNoContentEmitted(t *testing.T) {
+	p := &streamProvider{
+		streams: [][]types.StreamChunk{
+			// First attempt: error with no prior emission. Must be retried.
+			{{Err: &retryableError{msg: "transient"}}},
+			// Second attempt: succeeds.
+			{
+				contentChunk("recovered"),
+				finishChunk("stop"),
+			},
+		},
+	}
+
+	var got strings.Builder
+	h := agent.New(p).
+		WithMaxSteps(5).
+		WithRetry(retry.Config{MaxAttempts: 3, InitialDelay: time.Millisecond})
+
+	result, err := h.RunStream(context.Background(), "task", func(s string) { got.WriteString(s) })
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got error: %v", err)
+	}
+	if result != "recovered" {
+		t.Fatalf("final = %q, want %q", result, "recovered")
+	}
+	if got.String() != "recovered" {
+		t.Fatalf("onChunk received %q, want %q", got.String(), "recovered")
+	}
+	// Both streams should have been consumed.
+	if len(p.streams) != 0 {
+		t.Fatalf("%d streams left unconsumed, expected retry to use both", len(p.streams))
+	}
+}
+
+// TestRunStream_DoesNotRetryAfterEmission verifies option B: once onChunk has
+// fired, a subsequent error terminates the step rather than retrying. Retrying
+// would force the caller to receive duplicate or divergent content.
+func TestRunStream_DoesNotRetryAfterEmission(t *testing.T) {
+	p := &streamProvider{
+		streams: [][]types.StreamChunk{
+			// First attempt: emits content, THEN errors. Must NOT be retried.
+			{
+				contentChunk("partial "),
+				{Err: &retryableError{msg: "mid-stream"}},
+			},
+			// Second attempt: exists but must not be consumed.
+			{
+				contentChunk("should not be seen"),
+				finishChunk("stop"),
+			},
+		},
+	}
+
+	var got strings.Builder
+	h := agent.New(p).
+		WithMaxSteps(5).
+		WithRetry(retry.Config{MaxAttempts: 3, InitialDelay: time.Millisecond})
+
+	_, err := h.RunStream(context.Background(), "task", func(s string) { got.WriteString(s) })
+	if err == nil {
+		t.Fatal("expected terminal error after emission, got nil")
+	}
+	if !strings.Contains(err.Error(), "mid-stream") {
+		t.Fatalf("expected underlying error to surface, got: %v", err)
+	}
+	if got.String() != "partial " {
+		t.Fatalf("onChunk received %q, want %q — retry may have re-emitted", got.String(), "partial ")
+	}
+	// The second stream must still be present — retry should have bailed.
+	if len(p.streams) != 1 {
+		t.Fatalf("%d streams left, expected 1 (second stream must not be consumed)", len(p.streams))
+	}
 }
 
 // TestRunStream_NameOnlyOnFirstFragment locks in that a later empty-string name

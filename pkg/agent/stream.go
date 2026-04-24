@@ -61,9 +61,24 @@ func (h *Harness) RunStream(ctx context.Context, task string, onChunk func(strin
 		var response types.Message
 		var err error
 		if streamOK {
+			var emitted bool
+			streamOnChunk := func(delta string) {
+				emitted = true
+				onChunk(delta)
+			}
 			response, err = retry.Do(invokeCtx, h.retryCfg, func() (types.Message, error) {
-				return consumeStream(invokeCtx, sp, messages, tools, onChunk, log)
+				msg, cerr := consumeStream(invokeCtx, sp, messages, tools, streamOnChunk, log)
+				if cerr != nil && emitted {
+					return types.Message{}, &terminalStreamError{err: cerr}
+				}
+				return msg, cerr
 			})
+			if err != nil {
+				var t *terminalStreamError
+				if errors.As(err, &t) {
+					err = t.err
+				}
+			}
 		} else {
 			response, err = retry.Do(invokeCtx, h.retryCfg, func() (types.Message, error) {
 				return h.provider.Invoke(invokeCtx, messages, tools)
@@ -234,6 +249,15 @@ func buildAssistantMessage(content string, partials []partialToolCall, usage *ty
 	_ = finish
 	return msg
 }
+
+// terminalStreamError marks an error from consumeStream as non-retryable because
+// onChunk has already emitted content. Retrying would cause the caller to see
+// duplicate or divergent content across attempts — see docs/streaming-followups.md.
+type terminalStreamError struct{ err error }
+
+func (e *terminalStreamError) Error() string   { return e.err.Error() }
+func (e *terminalStreamError) Unwrap() error   { return e.err }
+func (e *terminalStreamError) Retryable() bool { return false }
 
 func streamingModeLabel(streaming bool) string {
 	if streaming {
